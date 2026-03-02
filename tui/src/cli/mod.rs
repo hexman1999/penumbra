@@ -116,9 +116,7 @@ pub async fn run_cli(args: &CliArgs) -> Result<()> {
         }
     };
 
-    let mut builder = DeviceBuilder::default()
-        .with_mtk_port(mtk_port)
-        .with_verbose(args.verbose);
+    let mut builder = DeviceBuilder::default().with_mtk_port(mtk_port).with_verbose(args.verbose);
 
     builder = if let Some(da) = da_data {
         builder.with_da_data(da)
@@ -139,7 +137,6 @@ pub async fn run_cli(args: &CliArgs) -> Result<()> {
             soc_id: state.soc_id.clone(),
             meid: state.meid.clone(),
             hw_code: state.hw_code,
-            chipset: String::from("Unknown"),
             storage: None,
             partitions: vec![],
             target_config: state.target_config,
@@ -149,6 +146,7 @@ pub async fn run_cli(args: &CliArgs) -> Result<()> {
             dev.set_connection_type(ConnectionType::Da)?;
         }
 
+        dev.dev_info.set_chip(penumbra::core::chip::chip_from_hw_code(state.hw_code));
         dev.reinit(dev_info).await?;
     } else {
         info!("Initializing device...");
