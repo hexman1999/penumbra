@@ -282,8 +282,8 @@ pub const MT6855: ChipInfo = ChipBuilder::new("MT6855/Dimensity 8100", 0x1129)
     .build();
 
 pub const MT6895: ChipInfo = ChipBuilder::new("MT6895/Dimensity 8200", 0x1172)
-    .with_sej_base(0x1000A000)
-    .with_tzcc_base(0x10210000)
+    .with_sej_base(0x1C009000)
+    .with_tzcc_base(0x1C807000)
     .with_wdt(0x1C007000)
     .with_uart(0x11001000)
     .build();
