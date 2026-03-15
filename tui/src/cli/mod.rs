@@ -28,16 +28,16 @@ use crate::cli::state::PersistedDeviceState;
 #[command(author, version, about)]
 pub struct CliArgs {
     /// Run in CLI mode without TUI
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub cli: bool,
     /// Enable verbose logging, including debug information
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub verbose: bool,
     /// The DA file to use
-    #[arg(short, long = "da", value_name = "DA_FILE")]
+    #[arg(short, long = "da", value_name = "DA_FILE", global = true)]
     pub da_file: Option<PathBuf>,
     /// The preloader file to use
-    #[arg(short, long = "pl", value_name = "PRELOADER_FILE")]
+    #[arg(short, long = "pl", value_name = "PRELOADER_FILE", global = true)]
     pub preloader_file: Option<PathBuf>,
     /// Subcommands for CLI mode. If provided, TUI mode will be disabled.
     #[command(subcommand)]
