@@ -58,7 +58,7 @@ pub fn patch_da2(xflash: &mut XFlash) -> Result<DAEntryRegion> {
     let analyzer = Thumb2Analyzer::new(da2.data.clone(), da2.addr as u64);
 
     patch_security(&mut da2, &analyzer)?;
-    patch_boot_to(&mut da2)?;
+    patch_boot_to(&mut da2, &analyzer)?;
 
     Ok(da2)
 }
@@ -152,52 +152,58 @@ fn patch_sec_policy(da: &mut DAEntryRegion, analyzer: &Thumb2Analyzer) -> Result
 
 /// Adds back the boot_to command to da2, allowing to load extensions.
 /// This is needed only on DAs which build date is >= late 2023
-fn patch_boot_to(da: &mut DAEntryRegion) -> Result<bool> {
+fn patch_boot_to(da: &mut DAEntryRegion, analyzer: &Thumb2Analyzer) -> Result<bool> {
     // We only need to patch if the DA doesn't support this cmd.
     if find_pattern(&da.data, "636D645F626F6F745F746F00", 0) != HEX_NOT_FOUND {
-        return Ok(false);
+        let Some(boot_to_off) = analyzer.find_function_from_string("cmd_boot_to") else {
+            warn!("Can't patch cmd_boot_to!");
+            return Ok(false);
+        };
+
+        patch(&mut da.data, boot_to_off, &bytes_to_hex(EXT_LOADER))?;
+
+        info!("Patched DA2 boot_to!");
+
+        return Ok(true);
     }
 
     let dagent_reg_cmds = find_pattern(&da.data, "08B54FF460200021XXF7", 0);
-    let devc_read_reg = find_pattern(&da.data, "30B5002385B004460193", 0);
+    let Some(devc_read_reg) = analyzer.find_function_from_string("devc_ctrl_read_register") else {
+        warn!("Can't patch cmd_boot_to!");
+        return Ok(false);
+    };
+
     let unsupported_cmd = find_pattern(&da.data, "084B13B504460193", 0);
-    let register_maj_cmd = find_pattern(&da.data, "38B5054610200C46", 0);
+    let Some(cmd_code) = patch_pattern_str(&mut da.data, "03000E00", "08000100") else {
+        warn!("Can't patch cmd_boot_to!");
+        return Ok(false);
+    };
 
-    // Patch the devc_read_reg to be our new cmd
-    patch(&mut da.data, devc_read_reg, &bytes_to_hex(EXT_LOADER))?;
+    let Some(off) = analyzer.get_next_bl_from_off(dagent_reg_cmds) else {
+        warn!("Can't patch cmd_boot_to!");
+        return Ok(false);
+    };
 
-    // Find the LDR of unsupported cmd and patch it with devc_read_reg address (thumb addr)
     let unsupported_cmd_addr = to_thumb_addr(unsupported_cmd, da.addr).to_le_bytes();
+
+    let ldr_off = off + 4; // After the first bl, we replace movw
+    let ldr = encode_ldr(0, ldr_off, cmd_code + da.addr as usize, da.addr)?;
+
+    patch(&mut da.data, ldr_off, &bytes_to_hex(&ldr))?; // ldr r0, [#cmd_code]
+    patch(&mut da.data, ldr_off + 2, "00BF")?; // nop
+
+    let cmd_lit = find_pattern(&da.data, &bytes_to_hex(&unsupported_cmd_addr), dagent_reg_cmds);
+    if cmd_lit == HEX_NOT_FOUND {
+        warn!("Can't patch cmd_boot_to!");
+        return Ok(false);
+    }
+
     let devc_read_reg_addr = to_thumb_addr(devc_read_reg, da.addr).to_le_bytes();
 
-    // Patch the DAT to point to the new injected cmd
-    let unsupported_cmd_dat = find_pattern(&da.data, &bytes_to_hex(&unsupported_cmd_addr), 0);
-    patch(&mut da.data, unsupported_cmd_dat, &bytes_to_hex(&devc_read_reg_addr))?;
+    patch(&mut da.data, cmd_lit, &bytes_to_hex(&devc_read_reg_addr))?;
+    patch(&mut da.data, devc_read_reg, &bytes_to_hex(EXT_LOADER))?;
 
-    let mut reg_cmd_patch = Vec::with_capacity(20);
-
-    #[rustfmt::skip]
-    reg_cmd_patch.extend_from_slice(&[
-        0x4F, 0xF4, 0x80, 0x30, // mov.w r0, #0x10000
-        0x08, 0x30,             // adds r0, #0x8
-    ]);
-
-    let ldr_off = dagent_reg_cmds + 0x2 + reg_cmd_patch.len();
-    let ldr = encode_ldr(1, ldr_off, unsupported_cmd_dat, da.addr)?;
-
-    // da_agent addr + skip push + length of the patch
-    let bl_addr = ldr_off as u32 + 0x2 + da.addr;
-    let reg_maj_cmd_addr = to_thumb_addr(register_maj_cmd, da.addr);
-    let shellcode = encode_bl(bl_addr, reg_maj_cmd_addr);
-
-    reg_cmd_patch.extend_from_slice(&ldr);
-    reg_cmd_patch.extend_from_slice(&shellcode);
-    reg_cmd_patch.extend_from_slice(&[0xAF, 0xF3, 0x00, 0x80]); // nop.w
-    reg_cmd_patch.extend_from_slice(&[0xAF, 0xF3, 0x00, 0x80]); // nop.w
-
-    patch(&mut da.data, dagent_reg_cmds + 0x2, &bytes_to_hex(&reg_cmd_patch))?;
-
-    info!("[Penumbra] Patched DA2 to add cmd_boot_to");
+    info!("Patched DA2 to add cmd_boot_to");
 
     Ok(true)
 }

@@ -365,13 +365,11 @@ impl Thumb2Analyzer {
 
                     return Some(imm as u64);
                 }
-            } else {
-                if let Some(hw) = self.read_u16(off)
-                    && let Some((rm, rd)) = self.decode_mov(hw)
-                    && rd == reg
-                {
-                    reg = rm;
-                }
+            } else if let Some(hw) = self.read_u16(off)
+                && let Some((rm, rd)) = self.decode_mov(hw)
+                && rd == reg
+            {
+                reg = rm;
             }
 
             if off < 2 {
