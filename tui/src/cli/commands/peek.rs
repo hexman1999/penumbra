@@ -72,7 +72,7 @@ impl MtkCommand for PeekArgs {
         match dev.peek(self.address, self.length, &mut writer, &mut progress_callback).await {
             Ok(_) => {}
             Err(e) => {
-                pb.abandon("Format failed!");
+                pb.abandon("Read failed!");
                 return Err(e)?;
             }
         }
