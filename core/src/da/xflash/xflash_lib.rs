@@ -4,8 +4,9 @@
 */
 use std::sync::Arc;
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::time::{Duration, timeout};
 
 use crate::connection::Connection;
 use crate::connection::port::ConnectionType;
@@ -281,6 +282,18 @@ impl XFlash {
         progress: &mut (dyn FnMut(usize, usize) + Send),
     ) -> Result<()> {
         let chunk_size = self.write_packet_length.unwrap_or(0x8000);
+        self.download_data_with(size, chunk_size, reader, progress).await
+    }
+
+    /// Same as `download_data`, but with a custom chunk size.
+    /// Useful for limiting the packet size when needed.
+    pub async fn download_data_with(
+        &mut self,
+        size: usize,
+        chunk_size: usize,
+        reader: &mut (dyn AsyncRead + Unpin + Send),
+        progress: &mut (dyn FnMut(usize, usize) + Send),
+    ) -> Result<()> {
         let mut buffer = vec![0u8; chunk_size];
         let mut bytes_written = 0;
 
