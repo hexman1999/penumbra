@@ -13,14 +13,17 @@ use crate::connection::Connection;
 use crate::connection::port::ConnectionType;
 use crate::core::devinfo::DeviceInfo;
 use crate::core::seccfg::LockFlag;
-use crate::core::storage::{Gpt, Partition, PartitionKind, Storage, StorageType};
+use crate::core::storage::{Gpt, Partition, PartitionKind, RpmbRegion, Storage, StorageType};
 use crate::da::protocol::BootMode;
 use crate::da::xflash::cmds::*;
 #[cfg(not(feature = "no_exploits"))]
 use crate::da::xflash::exts::{
+    auth_rpmb,
     peek,
     poke,
+    read_rpmb,
     read32_ext,
+    write_rpmb,
     write32_ext,
 };
 use crate::da::xflash::flash;
@@ -423,8 +426,24 @@ impl DAProtocol for XFlash {
         writer: &mut (dyn AsyncWrite + Unpin + Send),
         progress: &mut (dyn FnMut(usize, usize) + Send),
     ) -> Result<()> {
-        // TODO: Rewrite V5 extensions, this is currently broken with current extensions
-        todo!()
+        read_rpmb(self, region, start_sector, sectors_count, writer, progress).await
+    }
+
+    #[cfg(not(feature = "no_exploits"))]
+    async fn write_rpmb(
+        &mut self,
+        region: RpmbRegion,
+        start_sector: u32,
+        sectors_count: u32,
+        reader: &mut (dyn AsyncRead + Unpin + Send),
+        progress: &mut (dyn FnMut(usize, usize) + Send),
+    ) -> Result<()> {
+        write_rpmb(self, region, start_sector, sectors_count, reader, progress).await
+    }
+
+    #[cfg(not(feature = "no_exploits"))]
+    async fn auth_rpmb(&mut self, region: RpmbRegion, key: &[u8]) -> Result<()> {
+        auth_rpmb(self, region, key).await
     }
 
     #[cfg(not(feature = "no_exploits"))]

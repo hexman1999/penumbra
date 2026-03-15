@@ -17,7 +17,20 @@ pub enum RpmbRegion {
     R4 = 3,
 }
 
-#[repr(u32)]
+impl TryFrom<u8> for RpmbRegion {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(RpmbRegion::R1),
+            1 => Ok(RpmbRegion::R2),
+            2 => Ok(RpmbRegion::R3),
+            3 => Ok(RpmbRegion::R4),
+            _ => Err("Invalid RPMB region"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageType {
     Unknown = 0,

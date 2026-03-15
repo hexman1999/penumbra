@@ -8,6 +8,7 @@ use log::{debug, info};
 use tokio::io::{AsyncRead, AsyncWrite};
 use xmlcmd_derive::XmlCommand;
 
+use crate::core::storage::{RPMB_FRAME_DATA_SZ, RpmbRegion, StorageType};
 use crate::da::DAProtocol;
 use crate::da::xml::Xml;
 use crate::da::xml::cmds::{XmlCmdLifetime, XmlCommand};
@@ -54,8 +55,12 @@ pub struct ExtWriteMem {
     #[xml(tag = "length", fmt = "0x{length:X}")]
     length: usize,
 }
+
+#[derive(XmlCommand)]
+pub struct ExtKeyDerive {
+    #[xml(tag = "key_type")]
+    key_type: String,
 }
-*/
 
 #[derive(XmlCommand)]
 pub struct ExtSej {
@@ -67,6 +72,34 @@ pub struct ExtSej {
     anti_clone: String,
     #[xml(tag = "length", fmt = "0x{length:X}")]
     length: u32,
+}
+
+#[derive(XmlCommand)]
+pub struct ExtRpmbInit {
+    #[xml(tag = "partition", fmt = "{partition}")]
+    partition: u32,
+    #[xml(tag = "key")]
+    key: String,
+}
+
+#[derive(XmlCommand)]
+pub struct ExtRpmbRead {
+    #[xml(tag = "partition", fmt = "{partition}")]
+    partition: u32,
+    #[xml(tag = "start_sector", fmt = "{start_sector}")]
+    start_sector: u32,
+    #[xml(tag = "sectors_count", fmt = "{sectors_count}")]
+    sectors_count: u32,
+}
+
+#[derive(XmlCommand)]
+pub struct ExtRpmbWrite {
+    #[xml(tag = "partition", fmt = "{partition}")]
+    partition: u32,
+    #[xml(tag = "start_sector", fmt = "{start_sector}")]
+    start_sector: u32,
+    #[xml(tag = "sectors_count", fmt = "{sectors_count}")]
+    sectors_count: u32,
 }
 
 pub async fn boot_extensions(xml: &mut Xml) -> Result<bool> {
@@ -263,21 +296,91 @@ pub async fn sej(
     Ok(buf)
 }
 
-pub async fn peek<F>(
+async fn init_rpmb(xml: &mut Xml, region: RpmbRegion) -> Result<()> {
+    // Derive RPMB key (0 = RPMB)
+    xmlcmd!(xml, ExtKeyDerive, "RPMB")?;
+    let resp = xml.get_upload_file_resp().await?;
+    let key: String = get_tag(&resp, "key")?;
+    //let rpmb_key = hex::decode(key_str).map_err(|_| Error::proto("Invalid RPMB key format"))?;
+
+    // If the RPMB is already initialized (even with another key), this will succeed
+    // without actually changing the key.
+    xmlcmd_e!(xml, ExtRpmbInit, region as u32, key)?;
+
+    Ok(())
+}
+
+pub async fn read_rpmb<F>(
     xml: &mut Xml,
-    addr: u32,
-    length: usize,
+    region: RpmbRegion,
+    start_sector: u32,
+    sectors_count: u32,
     writer: &mut (dyn AsyncWrite + Unpin + Send),
     mut progress: F,
 ) -> Result<()>
 where
     F: FnMut(usize, usize) + Send,
 {
-    xmlcmd!(xml, ExtReadMem, addr, length)?;
+    init_rpmb(xml, region).await?;
 
+    let storage = match xml.get_storage().await {
+        Some(s) => s,
+        None => {
+            return Err(Error::penumbra("Failed to get storage information for RPMB read"));
+        }
+    };
+
+    let rpmb_size = storage.get_rpmb_size();
+    let max_sectors = (rpmb_size / RPMB_FRAME_DATA_SZ as u64) as u32;
+    if start_sector.checked_add(sectors_count).is_none_or(|end| end > max_sectors) {
+        return Err(Error::penumbra("Requested RPMB read range is out of bounds"));
+    }
+
+    xmlcmd!(xml, ExtRpmbRead, region as u32, start_sector, sectors_count)?;
     xml.upload_file(writer, &mut progress).await?;
-
     xml.lifetime_ack(XmlCmdLifetime::CmdEnd).await?;
+
+    Ok(())
+}
+
+pub async fn write_rpmb<F>(
+    xml: &mut Xml,
+    region: RpmbRegion,
+    start_sector: u32,
+    sectors_count: u32,
+    reader: &mut (dyn AsyncRead + Unpin + Send),
+    mut progress: F,
+) -> Result<()>
+where
+    F: FnMut(usize, usize) + Send,
+{
+    init_rpmb(xml, region).await?;
+
+    let storage = match xml.get_storage().await {
+        Some(s) => s,
+        None => {
+            return Err(Error::penumbra("Failed to get storage information for RPMB write"));
+        }
+    };
+
+    let rpmb_size = storage.get_rpmb_size();
+    let max_sectors = (rpmb_size / RPMB_FRAME_DATA_SZ as u64) as u32;
+    if start_sector.checked_add(sectors_count).is_none_or(|end| end > max_sectors) {
+        return Err(Error::penumbra("Requested RPMB write range is out of bounds"));
+    }
+
+    let data_len = sectors_count as usize * RPMB_FRAME_DATA_SZ;
+
+    xmlcmd!(xml, ExtRpmbWrite, region as u32, start_sector, sectors_count)?;
+    xml.download_file(data_len, reader, &mut progress).await?;
+    xml.lifetime_ack(XmlCmdLifetime::CmdEnd).await?;
+
+    Ok(())
+}
+
+pub async fn auth_rpmb(xml: &mut Xml, region: RpmbRegion, key: &[u8]) -> Result<()> {
+    let key = bytes_to_hex(key);
+    xmlcmd_e!(xml, ExtRpmbInit, region as u32, key)?;
 
     Ok(())
 }

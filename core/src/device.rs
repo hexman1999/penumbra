@@ -15,7 +15,7 @@ use crate::core::crypto::config::CryptoIO;
 use crate::core::devinfo::{DevInfoData, DeviceInfo};
 use crate::core::log_buffer::DeviceLog;
 use crate::core::seccfg::LockFlag;
-use crate::core::storage::{Partition, PartitionKind};
+use crate::core::storage::{Partition, PartitionKind, RpmbRegion};
 use crate::da::protocol::BootMode;
 use crate::da::{DAFile, DAProtocol, DAType, XFlash, Xml};
 use crate::error::{Error, Result};
@@ -830,6 +830,43 @@ impl Device {
         protocol.poke(addr, size, reader, progress).await
     }
 
+    #[cfg(not(feature = "no_exploits"))]
+    pub async fn read_rpmb(
+        &mut self,
+        region: RpmbRegion,
+        start_sector: u32,
+        sectors_count: u32,
+        writer: &mut (dyn AsyncWrite + Unpin + Send),
+        progress: &mut (dyn FnMut(usize, usize) + Send),
+    ) -> Result<()> {
+        self.ensure_da_mode().await?;
+
+        let protocol = self.protocol.as_mut().unwrap();
+        protocol.read_rpmb(region, start_sector, sectors_count, writer, progress).await
+    }
+
+    #[cfg(not(feature = "no_exploits"))]
+    pub async fn write_rpmb(
+        &mut self,
+        region: RpmbRegion,
+        start_sector: u32,
+        sectors_count: u32,
+        reader: &mut (dyn AsyncRead + Unpin + Send),
+        progress: &mut (dyn FnMut(usize, usize) + Send),
+    ) -> Result<()> {
+        self.ensure_da_mode().await?;
+
+        let protocol = self.protocol.as_mut().unwrap();
+        protocol.write_rpmb(region, start_sector, sectors_count, reader, progress).await
+    }
+
+    #[cfg(not(feature = "no_exploits"))]
+    pub async fn auth_rpmb(&mut self, region: RpmbRegion, key: &[u8]) -> Result<()> {
+        self.ensure_da_mode().await?;
+
+        let protocol = self.protocol.as_mut().unwrap();
+        protocol.auth_rpmb(region, key).await
+    }
 }
 
 #[async_trait::async_trait]

@@ -12,7 +12,7 @@ use crate::connection::port::ConnectionType;
 use crate::core::chip::ChipInfo;
 use crate::core::devinfo::DeviceInfo;
 use crate::core::seccfg::LockFlag;
-use crate::core::storage::{Partition, PartitionKind, Storage, StorageType};
+use crate::core::storage::{Partition, PartitionKind, RpmbRegion, Storage, StorageType};
 use crate::da::{DA, DAEntryRegion};
 use crate::error::Result;
 
@@ -202,6 +202,38 @@ pub trait DAProtocol: DowncastSend {
         writer: &mut (dyn AsyncWrite + Unpin + Send),
         progress: &mut (dyn FnMut(usize, usize) + Send),
     ) -> Result<()>;
+
+    #[cfg(not(feature = "no_exploits"))]
+    async fn poke(
+        &mut self,
+        addr: u32,
+        length: usize,
+        reader: &mut (dyn AsyncRead + Unpin + Send),
+        progress: &mut (dyn FnMut(usize, usize) + Send),
+    ) -> Result<()>;
+
+    #[cfg(not(feature = "no_exploits"))]
+    async fn read_rpmb(
+        &mut self,
+        region: RpmbRegion,
+        start_sector: u32,
+        sectors_count: u32,
+        writer: &mut (dyn AsyncWrite + Unpin + Send),
+        progress: &mut (dyn FnMut(usize, usize) + Send),
+    ) -> Result<()>;
+
+    #[cfg(not(feature = "no_exploits"))]
+    async fn write_rpmb(
+        &mut self,
+        region: RpmbRegion,
+        start_sector: u32,
+        sectors_count: u32,
+        reader: &mut (dyn AsyncRead + Unpin + Send),
+        progress: &mut (dyn FnMut(usize, usize) + Send),
+    ) -> Result<()>;
+
+    #[cfg(not(feature = "no_exploits"))]
+    async fn auth_rpmb(&mut self, region: RpmbRegion, key: &[u8]) -> Result<()>;
 
     // DA Patching utils. These *must* be protocol specific, as different protocols
     // have different DA implementations

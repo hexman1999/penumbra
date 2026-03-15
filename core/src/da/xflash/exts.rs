@@ -7,6 +7,7 @@ use std::io::Cursor;
 use log::{debug, info};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::core::storage::{RPMB_FRAME_DATA_SZ, RpmbRegion};
 use crate::da::DAProtocol;
 use crate::da::xflash::{Cmd, XFlash};
 use crate::error::{Error, Result};
@@ -15,6 +16,9 @@ use crate::utilities::analysis::{Arch, create_analyzer};
 use crate::utilities::patching::{bytes_to_hex, patch_pattern_str};
 
 const DA_EXT: &[u8] = include_bytes!("../../../payloads/da_x.bin");
+// Won't go faster, and bigger packets makes the device hang
+const RPMB_WRITE_PKT_LEN: usize = 32 * 1024;
+
 #[repr(C)]
 struct DACtx {
     sej_base: u32,
@@ -241,4 +245,104 @@ pub async fn sej(
     status_ok!(xflash);
 
     Ok(payload)
+}
+
+async fn init_rpmb(xflash: &mut XFlash, region: RpmbRegion) -> Result<()> {
+    // Derive RPMB key (0 = RPMB)
+    xflash.devctrl(Cmd::ExtKeyDerive, Some(&[&0u32.to_le_bytes()])).await?;
+    let rpmb_key = xflash.read_data().await?;
+    status_ok!(xflash);
+
+    // If the RPMB is already initialized (even with another key), this will succeed
+    // without actually changing the key.
+    auth_rpmb(xflash, region, &rpmb_key).await?;
+
+    Ok(())
+}
+
+pub async fn read_rpmb<F>(
+    xflash: &mut XFlash,
+    region: RpmbRegion,
+    start_sector: u32,
+    sectors_count: u32,
+    writer: &mut (dyn AsyncWrite + Unpin + Send),
+    mut progress: F,
+) -> Result<()>
+where
+    F: FnMut(usize, usize) + Send,
+{
+    init_rpmb(xflash, region).await?;
+
+    let storage = match xflash.get_storage().await {
+        Some(s) => s,
+        None => {
+            return Err(Error::penumbra("Failed to get storage information for RPMB read"));
+        }
+    };
+
+    let rpmb_size = storage.get_rpmb_size();
+    let max_sectors = (rpmb_size / RPMB_FRAME_DATA_SZ as u64) as u32;
+    if start_sector.checked_add(sectors_count).is_none_or(|end| end > max_sectors) {
+        return Err(Error::penumbra("Requested RPMB read range is out of bounds"));
+    }
+
+    let mut sector_range = [0u8; 8];
+    sector_range[0..4].copy_from_slice(&start_sector.to_le_bytes());
+    sector_range[4..8].copy_from_slice(&sectors_count.to_le_bytes());
+
+    let region = (region as u32).to_le_bytes();
+    let data_len = sectors_count as usize * RPMB_FRAME_DATA_SZ;
+
+    xflash.devctrl(Cmd::ExtRpmbRead, Some(&[&region, &sector_range])).await?;
+    xflash.upload_data(data_len, writer, &mut progress).await?;
+    status_ok!(xflash);
+
+    Ok(())
+}
+
+pub async fn write_rpmb<F>(
+    xflash: &mut XFlash,
+    region: RpmbRegion,
+    start_sector: u32,
+    sectors_count: u32,
+    reader: &mut (dyn AsyncRead + Unpin + Send),
+    mut progress: F,
+) -> Result<()>
+where
+    F: FnMut(usize, usize) + Send,
+{
+    init_rpmb(xflash, region).await?;
+
+    let storage = match xflash.get_storage().await {
+        Some(s) => s,
+        None => {
+            return Err(Error::penumbra("Failed to get storage information for RPMB write"));
+        }
+    };
+
+    let rpmb_size = storage.get_rpmb_size();
+    let max_sectors = (rpmb_size / RPMB_FRAME_DATA_SZ as u64) as u32;
+    if start_sector.checked_add(sectors_count).is_none_or(|end| end > max_sectors) {
+        return Err(Error::penumbra("Requested RPMB write range is out of bounds"));
+    }
+
+    let mut sector_range = [0u8; 8];
+    sector_range[0..4].copy_from_slice(&start_sector.to_le_bytes());
+    sector_range[4..8].copy_from_slice(&sectors_count.to_le_bytes());
+
+    let region = (region as u32).to_le_bytes();
+    let data_len = sectors_count as usize * RPMB_FRAME_DATA_SZ;
+
+    xflash.devctrl(Cmd::ExtRpmbWrite, Some(&[&region, &sector_range])).await?;
+    xflash.download_data_with(data_len, RPMB_WRITE_PKT_LEN, reader, &mut progress).await?;
+    status_ok!(xflash);
+
+    Ok(())
+}
+
+pub async fn auth_rpmb(xflash: &mut XFlash, region: RpmbRegion, key: &[u8]) -> Result<()> {
+    xflash.devctrl(Cmd::ExtRpmbInit, Some(&[&(region as u32).to_le_bytes(), key])).await?;
+    status_ok!(xflash);
+
+    Ok(())
 }
